@@ -2,7 +2,7 @@
 
     pool.h
 
-    Resource pool code
+    Memory pool code
 
     Copyright (c) 1996-2006, Nicola Salmoria and the MAME Team.
     Visit http://mamedev.org for licensing and usage restrictions.
@@ -18,7 +18,7 @@
     TYPE DEFINITIONS
 ***************************************************************************/
 
-typedef struct _resource_pool memory_pool;
+typedef struct _memory_pool memory_pool;
 
 typedef enum _memory_block_overlap memory_block_overlap;
 enum _memory_block_overlap
@@ -47,7 +47,5 @@ char *pool_strdup_file_line(memory_pool *pool, const char *str, const char *file
 
 memory_block_overlap pool_contains_block(memory_pool *pool, void *ptr, size_t size,
 	void **found_block, size_t *found_block_size);
-
-
 
 #endif /* __POOL_H__ */
