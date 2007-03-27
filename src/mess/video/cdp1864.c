@@ -1,7 +1,7 @@
 #include "driver.h"
 #include "video/generic.h"
 #include "cpu/cdp1802/cdp1802.h"
-#include "video/cdp186x.h"
+#include "video/cdp1864.h"
 #include "sound/beep.h"
 
 /*
@@ -105,4 +105,3 @@ VIDEO_UPDATE( cdp1864 )
 	// TODO: draw videoram to screen using DMA
 	return 0;
 }
-
