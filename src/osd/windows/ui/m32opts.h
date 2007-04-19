@@ -16,7 +16,7 @@
 #include "osdcomm.h"
 #include "osd_cpu.h"
 #include "bitmask.h"
-#include "../lib/util/options.h"
+#include "options.h"
 #include "input.h" /* for input_seq definition */
 #include <video.h> /* for MAX_SCREENS Definition*/
 
@@ -109,123 +109,6 @@ typedef struct
 } ScreenParams;
 
 
-typedef struct
-{
-	/* video */
-	char   *videomode;
-	char   *effect;
-	int    numscreens;
-	int    prescale;
-	BOOL   autoframeskip;
-	int    frameskip;
-	BOOL   wait_vsync;
-	BOOL   use_triplebuf;
-	BOOL   window_mode;
-	BOOL   ddraw_stretch;
-	int    gfx_refresh;
-	BOOL   switchres;
-	BOOL   maximize;
-	BOOL   keepaspect;
-	BOOL   syncrefresh;
-	BOOL   throttle;
-	double gfx_gamma;
-	double gfx_brightness;
-	double gfx_contrast;
-	int seconds_to_display;
-	ScreenParams screen_params[MAX_SCREENS];
-
-	// d3d
-	BOOL d3d_filter;
-	int d3d_version;
-	/* sound */
-
-	/* input */
-	BOOL   use_mouse;
-	BOOL   use_joystick;
-	double f_jdz;
-	double f_jsat;
-	BOOL   steadykey;
-	BOOL   lightgun;
-	BOOL   dual_lightgun;
-	BOOL   offscreen_reload;
-	char *ctrlr;
-	char *digital;
-	char *paddle;
-	char *adstick;
-	char *pedal;
-	char *dial;
-	char *trackball;
-	char *lightgun_device;
-
-	/* Core video */
-	double f_bright_correct; /* "1.0", 0.5, 2.0 */
-	double f_pause_bright; /* "0.65", 0.5, 2.0 */
-	double f_contrast_correct; /* "1.0", 0.5, 2.0 */
-	BOOL   rotate;
-	BOOL   ror;
-	BOOL   rol;
-	BOOL   auto_ror;
-	BOOL   auto_rol;
-	BOOL   flipx;
-	BOOL   flipy;
-	double f_gamma_correct; /* "1.0", 0.5, 3.0 */
-
-	/* Core vector */
-	BOOL   antialias;
-	BOOL   translucency;
-	double f_beam;
-	double f_flicker;
-
-	/* Sound */
-	int    samplerate;
-	BOOL   use_samples;
-	BOOL   enable_sound;
-	int    attenuation;
-	int    audio_latency;
-
-	/* Misc artwork options */
-	BOOL   backdrops;
-	BOOL   overlays;
-	BOOL   bezels;
-	BOOL   artwork_crop;
-
-	/* misc */
-	BOOL   cheat;
-	BOOL   mame_debug;
-	BOOL   errorlog;
-	BOOL   sleep;
-	BOOL   old_timing;
-	BOOL   leds;
-	char   *ledmode;
-	int    priority;
-	BOOL   skip_gameinfo;
-#ifdef MESS
-	BOOL   skip_warnings;
-#endif
-	char   *bios;
-	BOOL   autosave;
-	BOOL   mt_render;
-
-#ifdef MESS
-	struct mess_specific_options mess;
-#endif
-} options_type;
-
-// per-game data we store, not to pass to mame, but for our own use.
-typedef struct
-{
-    int play_count;
-	int play_time;
-    int rom_audit_results;
-    int samples_audit_results;
-
-    BOOL options_loaded; // whether or not we've loaded the game options yet
-    BOOL use_default; // whether or not we should just use default options
-
-#ifdef MESS
-    struct mess_specific_game_variables mess;
-#endif
-} game_variables_type;
 
 // List of artwork types to display in the screen shot area
 enum
@@ -249,162 +132,26 @@ enum
 // (that's how many options we have after MAX_TAB_TYPES)
 #define TAB_SUBTRACT 3
 
-
-typedef struct
-{
-    INT      folder_id;
-    BOOL     view;
-    BOOL     show_folderlist;
-	LPBITS   show_folder_flags;
-    BOOL     show_toolbar;
-    BOOL     show_statusbar;
-    BOOL     show_screenshot;
-    BOOL     show_tabctrl;
-	int      show_tab_flags;
-	int      history_tab;
-    char     *current_tab;
-    BOOL     game_check;        /* Startup GameCheck */
-    BOOL     use_joygui;
-	BOOL     use_keygui;
-    BOOL     broadcast;
-    BOOL     random_bg;
-    int      cycle_screenshot;
-	BOOL     stretch_screenshot_larger;
-    int      screenshot_bordersize;
-    COLORREF screenshot_bordercolor;
-	BOOL     inherit_filter;
-	BOOL     offset_clones;
-	BOOL	 game_caption;
-
-    char     *default_game;
-    int      column_width[COLUMN_MAX];
-    int      column_order[COLUMN_MAX];
-    int      column_shown[COLUMN_MAX];
-    int      sort_column;
-    BOOL     sort_reverse;
-    AREA     area;
-    UINT     windowstate;
-    int      splitter[4];		/* NPW 5-Feb-2003 - I don't like hard coding this, but I don't have a choice */
-    COLORREF custom_color[16]; /* This is how many custom colors can be shown on the standard ColorPicker */
-    LOGFONT  list_font;
-    COLORREF list_font_color;
-    COLORREF list_clone_color;
-    BOOL     skip_gameinfo;
-#ifdef MESS
-	BOOL     skip_warnings;
-#endif
-    int      priority;
-    BOOL     autosave;
-    BOOL     mt_render;
-
-	// Keyboard control of ui
-    KeySeq   ui_key_up;
-    KeySeq   ui_key_down;
-    KeySeq   ui_key_left;
-    KeySeq   ui_key_right;
-    KeySeq   ui_key_start;
-    KeySeq   ui_key_pgup;
-    KeySeq   ui_key_pgdwn;
-    KeySeq   ui_key_home;
-    KeySeq   ui_key_end;
-    KeySeq   ui_key_ss_change;
-    KeySeq   ui_key_history_up;
-    KeySeq   ui_key_history_down;
-
-    KeySeq   ui_key_context_filters;	/* CTRL F */
-    KeySeq   ui_key_select_random;		/* CTRL R */
-    KeySeq   ui_key_game_audit;			/* ALT A */
-    KeySeq   ui_key_game_properties;	/* ALT VK_RETURN */
-    KeySeq   ui_key_help_contents;		/* VK_F1 */
-    KeySeq   ui_key_update_gamelist;	/* VK_F5 */
-    KeySeq   ui_key_view_folders;		/* ALT D */
-    KeySeq   ui_key_view_fullscreen;	/* VK_F11 */
-    KeySeq   ui_key_view_pagetab;		/* ALT B */
-    KeySeq   ui_key_view_picture_area;	/* ALT P */
-    KeySeq   ui_key_view_status;		/* ALT S */
-    KeySeq   ui_key_view_toolbars;		/* ALT T */
-
-    KeySeq   ui_key_view_tab_cabinet;	/* ALT 3 */
-    KeySeq   ui_key_view_tab_cpanel;	/* ALT 6 */
-    KeySeq   ui_key_view_tab_flyer;		/* ALT 2 */
-    KeySeq   ui_key_view_tab_history;	/* ALT 7 */
-    KeySeq   ui_key_view_tab_marquee;	/* ALT 4 */
-    KeySeq   ui_key_view_tab_screenshot;/* ALT 1 */
-    KeySeq   ui_key_view_tab_title;		/* ALT 5 */
-    KeySeq   ui_key_quit;				/* ALT Q */
-
-    // Joystick control of ui
-	// array of 4 is joystick index, stick or button, etc.
-    int      ui_joy_up[4];
-    int      ui_joy_down[4];
-    int      ui_joy_left[4];
-    int      ui_joy_right[4];
-    int      ui_joy_start[4];
-    int      ui_joy_pgup[4];
-    int      ui_joy_pgdwn[4];
-    int      ui_joy_home[4];
-    int      ui_joy_end[4];
-    int      ui_joy_ss_change[4];
-    int      ui_joy_history_up[4];
-    int      ui_joy_history_down[4];
-    int      ui_joy_exec[4];
-
-    char*    exec_command;  // Command line to execute on ui_joy_exec   
-    int      exec_wait;     // How long to wait before executing
-    BOOL     hide_mouse;    // Should mouse cursor be hidden on startup?
-    BOOL     full_screen;   // Should we fake fullscreen?
-
-    char *language;
-    char *flyerdir;
-    char *cabinetdir;
-    char *marqueedir;
-    char *titlesdir;
-    char *cpaneldir;
-
-    char*    romdirs;
-    char*    sampledirs;
-    char*    inidir;
-    char*    cfgdir;
-    char*    nvramdir;
-    char*    memcarddir;
-    char*    inpdir;
-    char*    statedir;
-    char*    artdir;
-    char*    imgdir;
-    char*    diffdir;
-    char*	 iconsdir;
-    char*    bgdir;
-    char*    cheat_filename;
-    char*    history_filename;
-    char*    mameinfo_filename;
-    char*    ctrlrdir;
-    char*    folderdir;
-    char*    commentdir;
-
-#ifdef MESS
-    struct mess_specific_settings mess;
-#endif
-
-} settings_type; /* global settings for the UI only */
-
 BOOL OptionsInit(void);
 void FolderOptionsInit(void);
 void OptionsExit(void);
 
-void FreeGameOptions(options_type *o);
-void CopyGameOptions(const options_type *source,options_type *dest);
-void SyncInFolderOptions(options_type *opts, int folder_index);
-options_type * GetDefaultOptions(int iProperty, BOOL bVectorFolder);
-options_type * GetFolderOptions(int folder_index, BOOL bIsVector);
+core_options * CreateGameOptions(BOOL is_global);
+
+void SyncInFolderOptions(core_options *opts, int folder_index);
+core_options * GetDefaultOptions(int iProperty, BOOL bVectorFolder);
+core_options * GetFolderOptions(int folder_index, BOOL bIsVector);
 
 int * GetFolderOptionsRedirectArr(void);
 void SetFolderOptionsRedirectArr(int *redirect_arr);
 int GetRedirectIndex(int folder_index);
 int GetRedirectValue(int index);
 
-options_type * GetVectorOptions(void);
-options_type * GetSourceOptions(int driver_index );
-options_type * GetGameOptions(int driver_index, int folder_index );
+core_options * GetVectorOptions(void);
+core_options * GetSourceOptions(int driver_index );
+core_options * GetGameOptions(int driver_index, int folder_index );
+core_options * Mame32Settings(void);
+core_options * Mame32Global(void);
 BOOL GetVectorUsesDefaults(void);
 BOOL GetFolderUsesDefaults(int folder_index, int driver_index);
 BOOL GetGameUsesDefaults(int driver_index);
@@ -495,7 +242,7 @@ const char *GetCurrentTab(void);
 void SetDefaultGame(const char *name);
 const char *GetDefaultGame(void);
 
-void SetWindowArea(AREA *area);
+void SetWindowArea(const AREA *area);
 void GetWindowArea(AREA *area);
 
 void SetWindowState(UINT state);
@@ -516,7 +263,7 @@ int  GetSplitterPos(int splitterId);
 void SetCustomColor(int iIndex, COLORREF uColor);
 COLORREF GetCustomColor(int iIndex);
 
-void SetListFont(LOGFONT *font);
+void SetListFont(const LOGFONT *font);
 void GetListFont(LOGFONT *font);
 
 DWORD GetFolderFlags(int folder_index);
@@ -637,6 +384,9 @@ char * GetVersionString(void);
 void SaveGameOptions(int driver_index);
 void SaveDefaultOptions(void);
 
+BOOL IsGlobalOption(const char *option_name);
+
+
 
 // Keyboard control of ui
 input_seq* Get_ui_key_up(void);
@@ -714,7 +464,7 @@ void SetUIJoyHistoryDown(int joycodeIndex, int val);
 int GetUIJoyExec(int joycodeIndex);
 void SetUIJoyExec(int joycodeIndex, int val);
 
-char* GetExecCommand(void);
+const char* GetExecCommand(void);
 void SetExecCommand(char* cmd);
 
 int GetExecWait(void);
@@ -725,5 +475,8 @@ void SetHideMouseOnStartup(BOOL hide);
 
 BOOL GetRunFullScreen(void);
 void SetRunFullScreen(BOOL fullScreen);
+
+void ColumnEncodeStringWithCount(const int *value, char *str, int count);
+void ColumnDecodeStringWithCount(const char* str, int *value, int count);
 
 #endif
