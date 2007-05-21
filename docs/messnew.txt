@@ -45,6 +45,7 @@ System Driver Changes:
 
 - [COCO/DRAGON] Cartridge slot rearchitecture.  [Nate Woods]
 
+- [sysinfo.dat] Massive update to entire file. [Fabio Priuli]
 
 
 User Interface Changes:
