@@ -96,9 +96,6 @@ DEFS += \
 #	-DSHOW_UNAVAILABLE_FOLDER
 
 
-#####################################################################
-# Resources
-
 
 #####################################################################
 # Linker
@@ -115,6 +112,7 @@ endif
 
 
 #####################################################################
+# Resources
 
 
 $(MESS_WINUIOBJ)/messui.res:	$(WINUISRC)/mameui.rc $(MESS_WINUISRC)/messui.rc $(WINUISRC)/resource.h $(MESS_WINUISRC)/resourcems.h $(WINUIOBJ)/mamevers.rc
