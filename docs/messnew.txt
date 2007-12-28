@@ -26,6 +26,8 @@ System Driver Changes:
 
 - [GAMEBOY] Improved penalty cycle count for enabled sprites.  [Wilbert Pol]
 
+- [MEGADUCK] Fixed default aspect ratio. [Justin Kerk]
+
 - [MEPHISTO] Fixed a keyboard mapping bug.  [Dirk Verwiebe]
 
 - [QL] Added sound. [Curt Coder]
