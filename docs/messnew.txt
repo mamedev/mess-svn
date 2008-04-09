@@ -43,7 +43,7 @@ System Driver Changes:
 
 User Interface Changes:
 -----------------------
-(none)
+- [MESSUI] Updated MESS icon, logo and other artwork (Asterokid, MAMEPlus team, Hobie Troxell)
 
 
 
