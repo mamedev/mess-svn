@@ -93,6 +93,9 @@ System Driver Changes:
   computers used the same format as C64. More work when/if more documents 
   will be available [Fabio Priuli]
 
+- [SG1000] Lightgun crosshair is now shown only if TV Draw cartridge is 
+  loaded. [Curt Coder]
+
 - [SYM1] Refactored cartridge code to rely on MESS core functions. Code to
   load cartridges has never been present apparently, but now it only miss
   memory addresses to be working. More work when/if more documents will 
