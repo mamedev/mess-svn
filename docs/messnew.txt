@@ -167,11 +167,6 @@ System Driver Changes:
 
 - [SPECTRUM] Added lot of Spectrum clones and custom ROM's [Miodrag Milanovic]
 
-- [SYM1] Refactored cartridge code to rely on MESS core functions. Code to
-  load cartridges has never been present apparently, but now it only miss
-  memory addresses to be working. More work when/if more documents will 
-  be available [Fabio Priuli]
-
 - [TI99] Changed ESC key to map to F12.  [Michael Zapf]
 
 - [TMC2000] Fixed quickloading. [Curt Coder]
