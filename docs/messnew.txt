@@ -12,6 +12,9 @@ System Driver Changes:
 
 - [X68000] Added support for the XPD-1LR dual D-pad controller.  [Barry Rodewald]
 
+- [VISICOM] Toshiba Visicom is now working and playable, but the
+  graphics emulation is not perfect yet. [Curt Coder]
+
 
 
 User Interface Changes:
