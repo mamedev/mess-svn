@@ -1,10 +1,18 @@
+/**********************************************************************
+
+    RCA CDP1864C COS/MOS PAL Compatible Color TV Interface
+
+    Copyright MESS Team.
+    Visit http://mamedev.org for licensing and usage restrictions.
+
+**********************************************************************/
+
 /*
 
     TODO:
 
 	- interlace mode
 	- PAL output, currently using RGB
-    - connect to sound system when possible
 	- cpu synchronization
 
 		SC1 and SC0 are used to provide CDP1864C-to-CPU synchronization for a jitter-free display.
@@ -15,17 +23,16 @@
 */
 
 #include "driver.h"
+#include "cdp1864.h"
 #include "sndintrf.h"
 #include "streams.h"
 #include "cpu/cdp1802/cdp1802.h"
-#include "sound/beep.h"
-#include "video/cdp1864.h"
 
 /***************************************************************************
     PARAMETERS
 ***************************************************************************/
 
-#define CDP1864_DEFAULT_LATCH	0x35
+#define CDP1864_DEFAULT_LATCH		0x35
 
 #define CDP1864_CYCLES_DMA_START	2*8
 #define CDP1864_CYCLES_DMA_ACTIVE	8*8
@@ -40,9 +47,12 @@ static const int CDP1864_BACKGROUND_COLOR_SEQUENCE[] = { 2, 0, 1, 4 };
 typedef struct _cdp1864_t cdp1864_t;
 struct _cdp1864_t
 {
-	devcb_resolved_write_line	out_int_func;
-	devcb_resolved_write_line	out_dmao_func;
-	devcb_resolved_write_line	out_efx_func;
+	devcb_resolved_read_line		in_rdata_func;
+	devcb_resolved_read_line		in_bdata_func;
+	devcb_resolved_read_line		in_gdata_func;
+	devcb_resolved_write_line		out_int_func;
+	devcb_resolved_write_line		out_dmao_func;
+	devcb_resolved_write_line		out_efx_func;
 
 	const device_config *screen;	/* screen */
 	bitmap_t *bitmap;				/* bitmap */
@@ -52,9 +62,10 @@ struct _cdp1864_t
 	int disp;						/* display on */
 	int dmaout;						/* DMA request active */
 	int bgcolor;					/* background color */
+	int con;						/* color on */
 
 	/* sound state */
-	int audio;						/* audio on */
+	int aoe;						/* audio on */
 	int latch;						/* sound latch */
 	INT16 signal;					/* current signal */
 	int incr;						/* initial wave state */
@@ -75,15 +86,7 @@ INLINE cdp1864_t *get_safe_token(const device_config *device)
 {
 	assert(device != NULL);
 	assert(device->token != NULL);
-
 	return (cdp1864_t *)device->token;
-}
-
-INLINE const cdp1864_interface *get_interface(const device_config *device)
-{
-	assert(device != NULL);
-	assert((device->type == CDP1864));
-	return (const cdp1864_interface *) device->static_config;
 }
 
 /***************************************************************************
@@ -235,19 +238,16 @@ static void cdp1864_init_palette(const device_config *device, const cdp1864_inte
     cdp1864_aoe_w - audio output enable
 -------------------------------------------------*/
 
-void cdp1864_aoe_w(const device_config *device, int level)
+WRITE_LINE_DEVICE_HANDLER( cdp1864_aoe_w )
 {
 	cdp1864_t *cdp1864 = get_safe_token(device);
-	const device_config *speaker = devtag_get_device(device->machine, "beep");
 
-	if (!level)
+	if (!state)
 	{
 		cdp1864->latch = CDP1864_DEFAULT_LATCH;
 	}
 
-	cdp1864->audio = level;
-
-	beep_set_state(speaker, level); // TODO: remove this
+	cdp1864->aoe = state;
 }
 
 /*-------------------------------------------------
@@ -293,35 +293,48 @@ WRITE8_DEVICE_HANDLER( cdp1864_step_bgcolor_w )
 }
 
 /*-------------------------------------------------
+    cdp1864_con_w - color on write
+-------------------------------------------------*/
+
+WRITE_LINE_DEVICE_HANDLER( cdp1864_con_w )
+{
+	cdp1864_t *cdp1864 = get_safe_token(device);
+
+	if (!state)
+	{
+		cdp1864->con = 0;
+	}
+}
+
+/*-------------------------------------------------
     cdp1864_tone_latch_w - load tone latch
 -------------------------------------------------*/
 
 WRITE8_DEVICE_HANDLER( cdp1864_tone_latch_w )
 {
 	cdp1864_t *cdp1864 = get_safe_token(device);
-	const device_config *speaker = devtag_get_device(device->machine, "beep");
 
 	cdp1864->latch = data;
-	beep_set_frequency(speaker, CDP1864_CLOCK / 8 / 4 / (data + 1) / 2); // TODO: remove this
 }
 
 /*-------------------------------------------------
     cdp1864_dma_w - write DMA byte
 -------------------------------------------------*/
 
-void cdp1864_dma_w(const device_config *device, UINT8 data, int color_on, int rdata, int gdata, int bdata)
+WRITE8_DEVICE_HANDLER( cdp1864_dma_w )
 {
 	cdp1864_t *cdp1864 = get_safe_token(device);
 
+	int rdata = 1, bdata = 1, gdata = 1;
 	int sx = video_screen_get_hpos(cdp1864->screen) + 4;
 	int y = video_screen_get_vpos(cdp1864->screen);
 	int x;
 
-	if (color_on == CLEAR_LINE)
+	if (!cdp1864->con)
 	{
-		rdata = 1;
-		gdata = 1;
-		bdata = 1;
+		rdata = devcb_call_read_line(&cdp1864->in_rdata_func);
+		bdata = devcb_call_read_line(&cdp1864->in_bdata_func);
+		gdata = devcb_call_read_line(&cdp1864->in_gdata_func);
 	}
 
 	for (x = 0; x < 8; x++)
@@ -340,23 +353,21 @@ void cdp1864_dma_w(const device_config *device, UINT8 data, int color_on, int rd
 }
 
 /*-------------------------------------------------
-    cdp1864_sound_update - update sound
+    STREAM_UPDATE( cdp1864_stream_update )
 -------------------------------------------------*/
 
-#ifdef UNUSED_FUNCTION
-static void cdp1864_sound_update(const device_config *device, stream_sample_t **inputs, stream_sample_t **_buffer, int length)
+static STREAM_UPDATE( cdp1864_stream_update )
 {
 	cdp1864_t *cdp1864 = get_safe_token(device);
 
 	INT16 signal = cdp1864->signal;
-	stream_sample_t *buffer = _buffer[0];
+	stream_sample_t *buffer = outputs[0];
 
-	memset(buffer, 0, length * sizeof(*buffer));
+	memset( buffer, 0, samples * sizeof(*buffer) );
 
-	if (cdp1864->audio)
+	if (cdp1864->aoe)
 	{
-		double frequency = cdp1864->intf->clock / 8 / 4 / (cdp1864->latch + 1) / 2;
-
+		double frequency = cpu_get_clock(cdp1864->cpu) / 8 / 4 / (cdp1864->latch + 1) / 2;
 		int rate = device->machine->sample_rate / 2;
 
 		/* get progress through wave */
@@ -371,7 +382,7 @@ static void cdp1864_sound_update(const device_config *device, stream_sample_t **
 			signal = 0x7fff;
 		}
 
-		while( length-- > 0 )
+		while( samples-- > 0 )
 		{
 			*buffer++ = signal;
 			incr -= frequency;
@@ -387,7 +398,6 @@ static void cdp1864_sound_update(const device_config *device, stream_sample_t **
 		cdp1864->signal = signal;
 	}
 }
-#endif
 
 /*-------------------------------------------------
     cdp1864_update - update screen
@@ -415,9 +425,12 @@ void cdp1864_update(const device_config *device, bitmap_t *bitmap, const rectang
 static DEVICE_START( cdp1864 )
 {
 	cdp1864_t *cdp1864 = get_safe_token(device);
-	const cdp1864_interface *intf = get_interface(device);
+	const cdp1864_interface *intf = (const cdp1864_interface *) device->static_config;
 
 	/* resolve callbacks */
+	devcb_resolve_read_line(&cdp1864->in_rdata_func, &intf->in_rdata_func, device);
+	devcb_resolve_read_line(&cdp1864->in_bdata_func, &intf->in_bdata_func, device);
+	devcb_resolve_read_line(&cdp1864->in_gdata_func, &intf->in_gdata_func, device);
 	devcb_resolve_write_line(&cdp1864->out_int_func, &intf->out_int_func, device);
 	devcb_resolve_write_line(&cdp1864->out_dmao_func, &intf->out_dmao_func, device);
 	devcb_resolve_write_line(&cdp1864->out_efx_func, &intf->out_efx_func, device);
@@ -436,6 +449,9 @@ static DEVICE_START( cdp1864 )
 	/* initialize the palette */
 	cdp1864_init_palette(device, intf);
 
+	/* create sound stream */
+	cdp1864->stream = stream_create(device, 0, 1, device->machine->sample_rate, cdp1864, cdp1864_stream_update);
+
 	/* create the timers */
 	cdp1864->int_timer = timer_alloc(device->machine, cdp1864_int_tick, (void *)device);
 	cdp1864->efx_timer = timer_alloc(device->machine, cdp1864_efx_tick, (void *)device);
@@ -445,8 +461,9 @@ static DEVICE_START( cdp1864 )
 	state_save_register_device_item(device, 0, cdp1864->disp);
 	state_save_register_device_item(device, 0, cdp1864->dmaout);
 	state_save_register_device_item(device, 0, cdp1864->bgcolor);
+	state_save_register_device_item(device, 0, cdp1864->con);
 
-	state_save_register_device_item(device, 0, cdp1864->audio);
+	state_save_register_device_item(device, 0, cdp1864->aoe);
 	state_save_register_device_item(device, 0, cdp1864->latch);
 	state_save_register_device_item(device, 0, cdp1864->signal);
 	state_save_register_device_item(device, 0, cdp1864->incr);
@@ -455,7 +472,7 @@ static DEVICE_START( cdp1864 )
 }
 
 /*-------------------------------------------------
-    DEVICE_RESET( cdp1861 )
+    DEVICE_RESET( cdp1864 )
 -------------------------------------------------*/
 
 static DEVICE_RESET( cdp1864 )
@@ -469,6 +486,7 @@ static DEVICE_RESET( cdp1864 )
 	cdp1864->disp = 0;
 	cdp1864->dmaout = 0;
 	cdp1864->bgcolor = 0;
+	cdp1864->con = 1;
 
 	devcb_call_write_line(&cdp1864->out_int_func, CLEAR_LINE);
 	devcb_call_write_line(&cdp1864->out_dmao_func, CLEAR_LINE);
@@ -478,7 +496,7 @@ static DEVICE_RESET( cdp1864 )
 }
 
 /*-------------------------------------------------
-    DEVICE_GET_INFO( cdp1861 )
+    DEVICE_GET_INFO( cdp1864 )
 -------------------------------------------------*/
 
 DEVICE_GET_INFO( cdp1864 )
