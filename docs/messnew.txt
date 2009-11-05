@@ -270,6 +270,9 @@ System Driver Changes:
 
 - [TI99] Converted Smartmed and RS232 card to be devices. [Miodrag Milanovic]
 
+- [TI99] Changed TI99/4a to use SN94624 sound chip variant. [Justin Kerk,
+  Lord Nightmare]
+
 - [TRS80] Model 4 and 4P can boot from floppy disk. [Robbbert]
 
 - [TS1500] Fixed memory size regression, it can boot now. [Robbbert]
