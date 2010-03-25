@@ -255,7 +255,7 @@ Currah uSpeech
     Speech synthesis thru allophones (SP0256-AL2)
 
 MGT Messenger
-    Allows connection between ZX Spectrum and SAM CoupÃ©
+    Allows connection between ZX Spectrum and SAM Coupé
 
 Soft-ROM
     A development system board - http://www.wearmouth.demon.co.uk/softrom.htm
