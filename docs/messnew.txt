@@ -40,6 +40,8 @@ System Driver Changes:
 
 - [TANDY2K] Implemented DMA mux register. [Curt Coder]
 
+- [TI81] Added v1.1K BIOS. [critor]
+
 - [TI99] Cleanups.  [Michael Zapf]
 
 - [VICTOR9K] Connected MC6852 device. [Curt Coder]
