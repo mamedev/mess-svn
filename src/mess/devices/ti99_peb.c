@@ -1,9 +1,3 @@
-/************************************************************************
-
-    Obsoleted by devices/ti99_peb.c
-
-************************************************************************/
-
 /*
     Peripheral expansion bus support.
 
@@ -104,16 +98,12 @@
     be equivalent and faster on a ti-99/4(a), but we need to interface the
     extension cards not only to the ti-99/4(a), but to the geneve and ti-99/8
     emulators as well.
+
+    June 2010: Reimplemented using device structure (MZ) (obsoletes 99_peb.c)
 */
 
 #include "emu.h"
-#include "99_peb.h"
-
-/* TRUE if we are using the snug sgcpu 99/4p 16-bit extensions */
-static int has_16bit_peb;
-
-/* handlers for each of 16 slots + 16 extra slots for ti-99/8 */
-static ti99_peb_card_handlers_t expansion_ports[16+16];
+#include "ti99_peb.h"
 
 enum width_t {
 	width_8bit = 0,
@@ -142,71 +132,61 @@ typedef struct ti99_4p_peb_card_handlers_t
 	} w;
 } ti99_4p_peb_card_handlers_t;
 
-/* handlers for each of 28 slots */
-static ti99_4p_peb_card_handlers_t ti99_4p_expansion_ports[28];
-
-/* index of the currently active card (-1 if none) */
-static int active_card;
-
-/* index of the currently active card, overridden by the mapper */
-static int active_card_tmp;
-
-/* Mapper override. */
-static int mapper_override;
-
-/* ila: inta status register (not actually used on ti-99/4(a), but nevertheless
-present) */
-static int ila;
-/* ilb: intb status register (completely pointless on ti-99/4(a), as neither
-INTB nor SENILB are connected; OTOH, INTB can trigger interrupts on a Geneve,
-and snug sgcpu 99/4p can sense ILB) */
-static int ilb;
-
-/* only used by the snug sgcpu 99/4p */
-static int senila, senilb;
-
-/* hack to simulate TMS9900 byte write */
-static int tmp_buffer;
-
-/* inta/intb handlers */
-static void (*inta_callback)(running_machine *machine, int state);
-static void (*intb_callback)(running_machine *machine, int state);
-
-
-/*
-    Initializes the expansion card handlers
-
-*/
-void ti99_peb_init()
+typedef struct _ti99_peb_state
 {
-	memset(expansion_ports, 0, sizeof(expansion_ports));
-	memset(ti99_4p_expansion_ports, 0, sizeof(ti99_4p_expansion_ports));
+	/* TRUE if we are using the snug sgcpu 99/4p 16-bit extensions */
+	int has_16bit_peb;
+
+	/* handlers for each of 28 slots */
+	ti99_4p_peb_card_handlers_t ti99_4p_expansion_ports[28];
+
+	/* handlers for each of 16 slots + 16 extra slots for ti-99/8 */
+	ti99_peb_card_handlers_t expansion_ports[16+16];
+
+	/* index of the currently active card (-1 if none) */
+	int active_card;
+
+	/* index of the currently active card, overridden by the mapper */
+	int active_card_tmp;
+
+	/* Mapper override. */
+	int mapper_override;
+
+	// ila: inta status register (not actually used on ti-99/4(a), but nevertheless
+	// present)
+	int ila;
+
+	// ilb: intb status register (completely pointless on ti-99/4(a), as neither
+	// INTB nor SENILB are connected; OTOH, INTB can trigger interrupts on a Geneve,
+	// and snug sgcpu 99/4p can sense ILB)
+	int ilb;
+
+	/* only used by the snug sgcpu 99/4p */
+	int senila, senilb;
+
+	/* hack to simulate TMS9900 byte write */
+	int tmp_buffer;
+
+	/* inta/intb handlers */
+	void (*inta_callback)(running_machine *machine, int state);
+	void (*intb_callback)(running_machine *machine, int state);
+
+	const address_space *space;
+
+} ti99_peb_state;
+
+INLINE ti99_peb_state *get_safe_token(running_device *device)
+{
+	assert(device != NULL);
+	assert(device->token != NULL);
+	return (ti99_peb_state *)device->token;
 }
 
-
-/*
-    Resets the expansion card handlers
-
-    in_has_16bit_peb: TRUE if we are using the snug sgcpu 99/4p 16-bit
-        extensions
-    in_inta_callback: callback called when the state of INTA changes (may be
-        NULL)
-    in_intb_callback: callback called when the state of INTB changes (may be
-        NULL)
-*/
-void ti99_peb_reset(int in_has_16bit_peb, void (*in_inta_callback)(running_machine *machine, int state), void (*in_intb_callback)(running_machine *machine, int state))
+INLINE const ti99_peb_config *get_config(running_device *device)
 {
-	has_16bit_peb = in_has_16bit_peb;
-	inta_callback = in_inta_callback;
-	intb_callback = in_intb_callback;
-
-	active_card = -1;
-	active_card_tmp = -1;
-
-	mapper_override = FALSE; // for ti99_4p
-
-	ila = 0;
-	ilb = 0;
+	assert(device != NULL);
+	assert(device->type == PBOX);
+	return (const ti99_peb_config *) device->baseconfig().inline_config;
 }
 
 /*
@@ -217,24 +197,25 @@ void ti99_peb_reset(int in_has_16bit_peb, void (*in_inta_callback)(running_machi
         ..., 0x2F00)
     handler: handler structure for the given card
 */
-void ti99_peb_set_card_handlers(int cru_base, const ti99_peb_card_handlers_t *handler)
+void ti99_peb_set_card_handlers(running_device *box, int cru_base, const ti99_peb_card_handlers_t *handler)
 {
 	int port;
+	ti99_peb_state *peb = get_safe_token(box);
 
 	if (cru_base & 0xff)
 		return;
 
-	if (has_16bit_peb)
+	if (peb->has_16bit_peb)
 	{
 		port = (cru_base - 0x0400) >> 8;
 
 		if ((port>=0) && (port<28))
 		{
-			ti99_4p_expansion_ports[port].cru_read = handler->cru_read;
-			ti99_4p_expansion_ports[port].cru_write = handler->cru_write;
-			ti99_4p_expansion_ports[port].width = width_8bit;
-			ti99_4p_expansion_ports[port].w.width_8bit.mem_read = handler->mem_read;
-			ti99_4p_expansion_ports[port].w.width_8bit.mem_write = handler->mem_write;
+			peb->ti99_4p_expansion_ports[port].cru_read = handler->cru_read;
+			peb->ti99_4p_expansion_ports[port].cru_write = handler->cru_write;
+			peb->ti99_4p_expansion_ports[port].width = width_8bit;
+			peb->ti99_4p_expansion_ports[port].w.width_8bit.mem_read = handler->mem_read;
+			peb->ti99_4p_expansion_ports[port].w.width_8bit.mem_write = handler->mem_write;
 		}
 	}
 	else
@@ -243,7 +224,7 @@ void ti99_peb_set_card_handlers(int cru_base, const ti99_peb_card_handlers_t *ha
 
 		if ((port>=0) && (port</*16*/32))
 		{
-			expansion_ports[port] = *handler;
+			peb->expansion_ports[port] = *handler;
 		}
 	}
 }
@@ -257,24 +238,25 @@ void ti99_peb_set_card_handlers(int cru_base, const ti99_peb_card_handlers_t *ha
         ..., 0x2F00)
     handler: handler structure for the given card
 */
-void ti99_peb_set_16bit_card_handlers(int cru_base, const ti99_peb_16bit_card_handlers_t *handler)
+void ti99_peb_set_16bit_card_handlers(running_device *box, int cru_base, const ti99_peb_16bit_card_handlers_t *handler)
 {
 	int port;
+	ti99_peb_state *peb = get_safe_token(box);
 
 	if (cru_base & 0xff)
 		return;
 
-	if (has_16bit_peb)
+	if (peb->has_16bit_peb)
 	{
 		port = (cru_base - 0x0400) >> 8;
 
 		if ((port>=0) && (port<28))
 		{
-			ti99_4p_expansion_ports[port].cru_read = handler->cru_read;
-			ti99_4p_expansion_ports[port].cru_write = handler->cru_write;
-			ti99_4p_expansion_ports[port].width = width_16bit;
-			ti99_4p_expansion_ports[port].w.width_16bit.mem_read = handler->mem_read;
-			ti99_4p_expansion_ports[port].w.width_16bit.mem_write = handler->mem_write;
+			peb->ti99_4p_expansion_ports[port].cru_read = handler->cru_read;
+			peb->ti99_4p_expansion_ports[port].cru_write = handler->cru_write;
+			peb->ti99_4p_expansion_ports[port].width = width_16bit;
+			peb->ti99_4p_expansion_ports[port].w.width_16bit.mem_read = handler->mem_read;
+			peb->ti99_4p_expansion_ports[port].w.width_16bit.mem_write = handler->mem_write;
 		}
 	}
 }
@@ -288,19 +270,20 @@ void ti99_peb_set_16bit_card_handlers(int cru_base, const ti99_peb_16bit_card_ha
         bit of the ILA register)
     state: 1 to assert bit, 0 to clear
 */
-void ti99_peb_set_ila_bit(running_machine *machine, int bit, int state)
+void ti99_peb_set_ila_bit(running_device *box, int bit, int state)
 {
+	ti99_peb_state *peb = get_safe_token(box);
 	if (state)
 	{
-		ila |= 1 << bit;
-		if (inta_callback)
-			(*inta_callback)(machine, 1);
+		peb->ila |= 1 << bit;
+		if (peb->inta_callback)
+			(*peb->inta_callback)(box->machine, 1);
 	}
 	else
 	{
-		ila &= ~(1 << bit);
-		if ((! ila) && inta_callback)
-			(*inta_callback)(machine, 0);
+		peb->ila &= ~(1 << bit);
+		if ((!peb->ila) && peb->inta_callback)
+			(*peb->inta_callback)(box->machine, 0);
 	}
 }
 
@@ -313,19 +296,21 @@ void ti99_peb_set_ila_bit(running_machine *machine, int bit, int state)
         bit of the ILB register)
     state: 1 to assert bit, 0 to clear
 */
-void ti99_peb_set_ilb_bit(running_machine *machine, int bit, int state)
+void ti99_peb_set_ilb_bit(running_device *box, int bit, int state)
 {
+	ti99_peb_state *peb = get_safe_token(box);
+
 	if (state)
 	{
-		ilb |= 1 << bit;
-		if (intb_callback)
-			(*intb_callback)(machine, 1);
+		peb->ilb |= 1 << bit;
+		if (peb->intb_callback)
+			(*peb->intb_callback)(box->machine, 1);
 	}
 	else
 	{
-		ilb &= ~(1 << bit);
-		if ((! ilb) && intb_callback)
-			(*intb_callback)(machine, 0);
+		peb->ilb &= ~(1 << bit);
+		if ((!peb->ilb) && peb->intb_callback)
+			(*peb->intb_callback)(box->machine, 0);
 	}
 }
 
@@ -333,16 +318,17 @@ void ti99_peb_set_ilb_bit(running_machine *machine, int bit, int state)
 /*
     Read CRU in range >1000->1ffe (>800->fff) (ti-99/4(a))
 */
-READ8_HANDLER ( ti99_4x_peb_cru_r )
+READ8_DEVICE_HANDLER( ti99_4x_peb_cru_r )
 {
 	int port;
 	cru_read_handler handler;
 	int reply;
+	ti99_peb_state *peb = get_safe_token(device);
 
 	port = (offset & 0x00f0) >> 4;
-	handler = expansion_ports[port].cru_read;
+	handler = peb->expansion_ports[port].cru_read;
 
-	reply = (handler) ? (*handler)(space->machine, offset & 0xf) : 0;
+	reply = (handler) ? (*handler)(device->machine, offset & 0xf) : 0;
 
 	return reply;
 }
@@ -350,16 +336,17 @@ READ8_HANDLER ( ti99_4x_peb_cru_r )
 /*
     Write CRU in range >1000->1ffe (>800->fff) (ti-99/4(a))
 */
-WRITE8_HANDLER ( ti99_4x_peb_cru_w )
+WRITE8_DEVICE_HANDLER( ti99_4x_peb_cru_w )
 {
 	int port;
 	cru_write_handler handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
 	port = (offset & 0x0780) >> 7;
-	handler = expansion_ports[port].cru_write;
+	handler = peb->expansion_ports[port].cru_write;
 
 	if (handler)
-		(*handler)(space->machine, offset & 0x7f, data);
+		(*handler)(device->machine, offset & 0x7f, data);
 
 	/* expansion card enable? */
 	if ((offset & 0x7f) == 0)
@@ -367,13 +354,13 @@ WRITE8_HANDLER ( ti99_4x_peb_cru_w )
 		if (data & 1)
 		{
 			/* enable */
-			active_card = port;
+			peb->active_card = port;
 		}
 		else
 		{
-			if (port == active_card)	/* geez... who cares? */
+			if (port == peb->active_card)	/* geez... who cares? */
 			{
-				active_card = -1;			/* no port selected */
+				peb->active_card = -1;			/* no port selected */
 			}
 		}
 	}
@@ -382,46 +369,48 @@ WRITE8_HANDLER ( ti99_4x_peb_cru_w )
 /*
     Read mem in range >4000->5ffe (ti-99/4(a))
 */
-READ16_HANDLER ( ti99_4x_peb_r )
+READ16_DEVICE_HANDLER( ti99_4x_peb_r )
 {
 	int reply = 0;
 	read8_space_func handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
-	cpu_adjust_icount(space->machine->firstcpu,-4);
+	cpu_adjust_icount(device->machine->firstcpu,-4);
 
-	if (active_card != -1)
+	if (peb->active_card != -1)
 	{
-		handler = expansion_ports[active_card].mem_read;
+		handler = peb->expansion_ports[peb->active_card].mem_read;
 		if (handler)
 		{
-			reply = (*handler)(space, (offset << 1) + 1);
-			reply |= ((unsigned) (*handler)(space, offset << 1)) << 8;
+			reply = (*handler)(peb->space, (offset << 1) + 1);
+			reply |= ((unsigned) (*handler)(peb->space, offset << 1)) << 8;
 		}
 	}
 //  printf("[%04x:%04x] = %04x\n", (active_card<<8)+0x1000, (offset<<1)+0x4000, reply);
 
-	return tmp_buffer = reply;
+	return peb->tmp_buffer = reply;
 }
 
 /*
     Write mem in range >4000->5ffe (ti-99/4(a))
 */
-WRITE16_HANDLER ( ti99_4x_peb_w )
+WRITE16_DEVICE_HANDLER( ti99_4x_peb_w )
 {
 	write8_space_func handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
-	cpu_adjust_icount(space->machine->firstcpu,-4);
+	cpu_adjust_icount(device->machine->firstcpu,-4);
 
 	/* simulate byte write */
-	data = (tmp_buffer & ~mem_mask) | (data & mem_mask);
+	data = (peb->tmp_buffer & ~mem_mask) | (data & mem_mask);
 
-	if (active_card != -1)
+	if (peb->active_card != -1)
 	{
-		handler = expansion_ports[active_card].mem_write;
+		handler = peb->expansion_ports[peb->active_card].mem_write;
 		if (handler)
 		{
-			(*handler)(space, (offset << 1) + 1, data & 0xff);
-			(*handler)(space, offset << 1, (data >> 8) & 0xff);
+			(*handler)(peb->space, (offset << 1) + 1, data & 0xff);
+			(*handler)(peb->space, offset << 1, (data >> 8) & 0xff);
 		}
 	}
 }
@@ -430,16 +419,17 @@ WRITE16_HANDLER ( ti99_4x_peb_w )
 /*
     Read CRU in range >1000->1ffe (>800->fff) (Geneve)
 */
- READ8_HANDLER ( geneve_peb_cru_r )
+READ8_DEVICE_HANDLER( geneve_peb_cru_r )
 {
 	int port;
 	cru_read_handler handler;
 	int reply;
+	ti99_peb_state *peb = get_safe_token(device);
 
 	port = (offset & 0x00f0) >> 4;
-	handler = expansion_ports[port].cru_read;
+	handler = peb->expansion_ports[port].cru_read;
 
-	reply = (handler) ? (*handler)(space->machine, offset & 0xf) : 0;
+	reply = (handler) ? (*handler)(device->machine, offset & 0xf) : 0;
 
 	return reply;
 }
@@ -447,16 +437,17 @@ WRITE16_HANDLER ( ti99_4x_peb_w )
 /*
     Write CRU in range >1000->1ffe (>800->fff) (Geneve)
 */
-WRITE8_HANDLER ( geneve_peb_cru_w )
+WRITE8_DEVICE_HANDLER( geneve_peb_cru_w )
 {
 	int port;
 	cru_write_handler handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
 	port = (offset & 0x0780) >> 7;
-	handler = expansion_ports[port].cru_write;
+	handler = peb->expansion_ports[port].cru_write;
 
 	if (handler)
-		(*handler)(space->machine, offset & 0x7f, data);
+		(*handler)(device->machine, offset & 0x7f, data);
 
 	/* expansion card enable? */
 	if ((offset & 0x7f) == 0)
@@ -464,13 +455,13 @@ WRITE8_HANDLER ( geneve_peb_cru_w )
 		if (data & 1)
 		{
 			/* enable */
-			active_card = port;
+			peb->active_card = port;
 		}
 		else
 		{
-			if (port == active_card)	/* geez... who cares? */
+			if (port == peb->active_card)	/* geez... who cares? */
 			{
-				active_card = -1;			/* no port selected */
+				peb->active_card = -1;			/* no port selected */
 			}
 		}
 	}
@@ -479,18 +470,19 @@ WRITE8_HANDLER ( geneve_peb_cru_w )
 /*
     Read mem in range >4000->5fff (Geneve)
 */
- READ8_HANDLER ( geneve_peb_r )
+READ8_DEVICE_HANDLER( geneve_peb_r )
 {
 	int reply = 0;
 	read8_space_func handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
-	cpu_adjust_icount(space->machine->firstcpu,-8);
+	cpu_adjust_icount(device->machine->firstcpu,-8);
 
-	if (active_card != -1)
+	if (peb->active_card != -1)
 	{
-		handler = expansion_ports[active_card].mem_read;
+		handler = peb->expansion_ports[peb->active_card].mem_read;
 		if (handler)
-			reply = (*handler)(space, offset);
+			reply = (*handler)(peb->space, offset);
 	}
 
 	return reply;
@@ -499,33 +491,35 @@ WRITE8_HANDLER ( geneve_peb_cru_w )
 /*
     Write mem in range >4000->5fff (Geneve)
 */
-WRITE8_HANDLER ( geneve_peb_w )
+WRITE8_DEVICE_HANDLER( geneve_peb_w )
 {
 	write8_space_func handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
-	cpu_adjust_icount(space->machine->firstcpu,-8);
+	cpu_adjust_icount(device->machine->firstcpu,-8);
 
-	if (active_card != -1)
+	if (peb->active_card != -1)
 	{
-		handler = expansion_ports[active_card].mem_write;
+		handler = peb->expansion_ports[peb->active_card].mem_write;
 		if (handler)
-			(*handler)(space, offset, data);
+			(*handler)(peb->space, offset, data);
 	}
 }
 
 /*
     Read CRU in range >1000->2ffe (>0800->17ff) (ti-99/8)
 */
- READ8_HANDLER ( ti99_8_peb_cru_r )
+READ8_DEVICE_HANDLER( ti99_8_peb_cru_r )
 {
 	int port;
 	cru_read_handler handler;
 	int reply;
+	ti99_peb_state *peb = get_safe_token(device);
 
 	port = (offset & 0x01f0) >> 4;
-	handler = expansion_ports[port].cru_read;
+	handler = peb->expansion_ports[port].cru_read;
 
-	reply = (handler) ? (*handler)(space->machine, offset & 0xf) : 0;
+	reply = (handler) ? (*handler)(device->machine, offset & 0xf) : 0;
 
 	return reply;
 }
@@ -533,16 +527,17 @@ WRITE8_HANDLER ( geneve_peb_w )
 /*
     Write CRU in range >1000->2ffe (>0800->17ff) (ti-99/8)
 */
-WRITE8_HANDLER ( ti99_8_peb_cru_w )
+WRITE8_DEVICE_HANDLER( ti99_8_peb_cru_w )
 {
 	int port;
 	cru_write_handler handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
 	port = (offset & 0x0f80) >> 7;
-	handler = expansion_ports[port].cru_write;
+	handler = peb->expansion_ports[port].cru_write;
 
 	if (handler)
-		(*handler)(space->machine, offset & 0x7f, data);
+		(*handler)(device->machine, offset & 0x7f, data);
 
 	/* expansion card enable? */
 	if ((offset & 0x7f) == 0)
@@ -550,13 +545,13 @@ WRITE8_HANDLER ( ti99_8_peb_cru_w )
 		if (data & 1)
 		{
 			/* enable */
-			active_card = port;
+			peb->active_card = port;
 		}
 		else
 		{
-			if (port == active_card)	/* geez... who cares? */
+			if (port == peb->active_card)	/* geez... who cares? */
 			{
-				active_card = -1;			/* no port selected */
+				peb->active_card = -1;			/* no port selected */
 			}
 		}
 	}
@@ -565,18 +560,19 @@ WRITE8_HANDLER ( ti99_8_peb_cru_w )
 /*
     Read mem in range >4000->5fff (ti-99/8)
 */
- READ8_HANDLER ( ti99_8_peb_r )
+READ8_DEVICE_HANDLER( ti99_8_peb_r )
 {
 	int reply = 0;
 	read8_space_func handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
-	cpu_adjust_icount(space->machine->firstcpu,-4);
+	cpu_adjust_icount(device->machine->firstcpu,-4);
 
-	if (active_card != -1)
+	if (peb->active_card != -1)
 	{
-		handler = expansion_ports[active_card].mem_read;
+		handler = peb->expansion_ports[peb->active_card].mem_read;
 		if (handler)
-			reply = (*handler)(space, offset);
+			reply = (*handler)(peb->space, offset);
 	}
 
 	return reply;
@@ -585,33 +581,35 @@ WRITE8_HANDLER ( ti99_8_peb_cru_w )
 /*
     Write mem in range >4000->5fff (ti-99/8)
 */
-WRITE8_HANDLER ( ti99_8_peb_w )
+WRITE8_DEVICE_HANDLER( ti99_8_peb_w )
 {
 	write8_space_func handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
-	cpu_adjust_icount(space->machine->firstcpu,-4);
+	cpu_adjust_icount(device->machine->firstcpu,-4);
 
-	if (active_card != -1)
+	if (peb->active_card != -1)
 	{
-		handler = expansion_ports[active_card].mem_write;
+		handler = peb->expansion_ports[peb->active_card].mem_write;
 		if (handler)
-			(*handler)(space, offset, data);
+			(*handler)(peb->space, offset, data);
 	}
 }
 
 /*
     Read CRU in range >0400->1ffe (>200->fff) (snug sgcpu 99/4p)
 */
-READ8_HANDLER( ti99_4p_peb_cru_r )
+READ8_DEVICE_HANDLER( ti99_4p_peb_cru_r )
 {
 	int port;
 	cru_read_handler handler;
 	int reply;
+	ti99_peb_state *peb = get_safe_token(device);
 
 	port = offset >> 4;
-	handler = ti99_4p_expansion_ports[port].cru_read;
+	handler = peb->ti99_4p_expansion_ports[port].cru_read;
 
-	reply = (handler) ? (*handler)(space->machine, offset & 0xf) : 0;
+	reply = (handler) ? (*handler)(device->machine, offset & 0xf) : 0;
 
 	return reply;
 }
@@ -619,18 +617,19 @@ READ8_HANDLER( ti99_4p_peb_cru_r )
 /*
     Write CRU in range >0400->1ffe (>200->fff) (snug sgcpu 99/4p)
 */
-WRITE8_HANDLER( ti99_4p_peb_cru_w )
+WRITE8_DEVICE_HANDLER( ti99_4p_peb_cru_w )
 {
 	int port;
 	cru_write_handler handler;
+	ti99_peb_state *peb = get_safe_token(device);
 
 	int cru_address = (offset + 0x200)<<1;
 
 	port = offset >> 7;
-	handler = ti99_4p_expansion_ports[port].cru_write;
+	handler = peb->ti99_4p_expansion_ports[port].cru_write;
 
 	if (handler)
-		(*handler)(space->machine, offset & 0x7f, data);
+		(*handler)(device->machine, offset & 0x7f, data);
 
 	/* expansion card enable? */
 	if ((cru_address & 0xfe) == 0)
@@ -642,23 +641,23 @@ WRITE8_HANDLER( ti99_4p_peb_cru_w )
 			{
 				// The internal mapper has precedence over the external bus.
 				// It may be turned on although there is another device currently turned on
-				active_card_tmp = active_card;
-				mapper_override = TRUE;
+				peb->active_card_tmp = peb->active_card;
+				peb->mapper_override = TRUE;
 			}
-			active_card = port;
+			peb->active_card = port;
 		}
 		else
 		{
-			if ((cru_address == 0x1e00) && mapper_override)
+			if ((cru_address == 0x1e00) && peb->mapper_override)
 			{
-				active_card = active_card_tmp;
-				mapper_override = FALSE;
+				peb->active_card = peb->active_card_tmp;
+				peb->mapper_override = FALSE;
 			}
 			else
 			{
-				if (port == active_card)	/* geez... who cares? */
+				if (port == peb->active_card)	/* geez... who cares? */
 				{
-					active_card = -1;			/* no port selected */
+					peb->active_card = -1;			/* no port selected */
 				}
 			}
 		}
@@ -668,88 +667,88 @@ WRITE8_HANDLER( ti99_4p_peb_cru_w )
 /*
     Read mem in range >4000->5ffe (snug sgcpu 99/4p)
 */
-READ16_HANDLER ( ti99_4p_peb_r )
+READ16_DEVICE_HANDLER( ti99_4p_peb_r )
 {
 	int reply = 0;
 	read8_space_func handler;
 	read16_space_func handler16;
+	ti99_peb_state *peb = get_safe_token(device);
 
-
-	if (active_card == -1)
-		cpu_adjust_icount(space->machine->firstcpu,-4);	/* ??? */
+	if (peb->active_card == -1)
+		cpu_adjust_icount(device->machine->firstcpu,-4);	/* ??? */
 	else
 	{
-
-		if (ti99_4p_expansion_ports[active_card].width == width_8bit)
+		if (peb->ti99_4p_expansion_ports[peb->active_card].width == width_8bit)
 		{
-			cpu_adjust_icount(space->machine->firstcpu,-4);
+			cpu_adjust_icount(device->machine->firstcpu,-4);
 
-			handler = ti99_4p_expansion_ports[active_card].w.width_8bit.mem_read;
+			handler = peb->ti99_4p_expansion_ports[peb->active_card].w.width_8bit.mem_read;
 			if (handler)
 			{
-				reply = (*handler)(space, (offset << 1) + 1);
-				reply |= ((unsigned) (*handler)(space, offset << 1)) << 8;
+				reply = (*handler)(peb->space, (offset << 1) + 1);
+				reply |= ((unsigned) (*handler)(peb->space, offset << 1)) << 8;
 			}
 		}
 		else
 		{
-			cpu_adjust_icount(space->machine->firstcpu,-1);	/* ??? */
+			cpu_adjust_icount(device->machine->firstcpu,-1);	/* ??? */
 
-			handler16 = ti99_4p_expansion_ports[active_card].w.width_16bit.mem_read;
+			handler16 = peb->ti99_4p_expansion_ports[peb->active_card].w.width_16bit.mem_read;
 			if (handler16)
-				reply = (*handler16)(space, offset, /*mem_mask*/0xffff);
+				reply = (*handler16)(peb->space, offset, /*mem_mask*/0xffff);
 		}
 	}
 
-	if (senila || senilb)
+	if (peb->senila || peb->senilb)
 	{
-		if ((active_card != -1) || (senila && senilb))
+		if ((peb->active_card != -1) || (peb->senila && peb->senilb))
 			/* ah, the smell of burnt silicon... */
 			logerror("<Scrrrrr>: your computer has just burnt (maybe).\n");
 
-		if (senila)
-			reply = (ila & 0xff) | (ila << 8);
-		else if (senilb)
-			reply = (ilb & 0xff) | (ilb << 8);
+		if (peb->senila)
+			reply = (peb->ila & 0xff) | (peb->ila << 8);
+		else if (peb->senilb)
+			reply = (peb->ilb & 0xff) | (peb->ilb << 8);
 	}
 
 //  printf("[%04x:%04x] = %04x\n", (active_card<<8)+0x400, (offset<<1)+0x4000, reply);
-	return tmp_buffer = reply;
+	return peb->tmp_buffer = reply;
 }
 
 /*
     Write mem in range >4000->5ffe (snug sgcpu 99/4p)
 */
-WRITE16_HANDLER ( ti99_4p_peb_w )
+WRITE16_DEVICE_HANDLER( ti99_4p_peb_w )
 {
 	write8_space_func handler;
 	write16_space_func handler16;
+	ti99_peb_state *peb = get_safe_token(device);
 
-	if (active_card == -1)
-		cpu_adjust_icount(space->machine->firstcpu,-4);	/* ??? */
+	if (peb->active_card == -1)
+		cpu_adjust_icount(device->machine->firstcpu,-4);	/* ??? */
 	else
 	{
 		/* simulate byte write */
-		data = (tmp_buffer & ~mem_mask) | (data & mem_mask);
+		data = (peb->tmp_buffer & ~mem_mask) | (data & mem_mask);
 
-		if (ti99_4p_expansion_ports[active_card].width == width_8bit)
+		if (peb->ti99_4p_expansion_ports[peb->active_card].width == width_8bit)
 		{
-			cpu_adjust_icount(space->machine->firstcpu,-4);
+			cpu_adjust_icount(device->machine->firstcpu,-4);
 
-			handler = ti99_4p_expansion_ports[active_card].w.width_8bit.mem_write;
+			handler = peb->ti99_4p_expansion_ports[peb->active_card].w.width_8bit.mem_write;
 			if (handler)
 			{
-				(*handler)(space, (offset << 1) + 1, data & 0xff);
-				(*handler)(space, offset << 1, (data >> 8) & 0xff);
+				(*handler)(peb->space, (offset << 1) + 1, data & 0xff);
+				(*handler)(peb->space, offset << 1, (data >> 8) & 0xff);
 			}
 		}
 		else
 		{
-			cpu_adjust_icount(space->machine->firstcpu,-1);	/* ??? */
+			cpu_adjust_icount(device->machine->firstcpu,-1);	/* ??? */
 
-			handler16 = ti99_4p_expansion_ports[active_card].w.width_16bit.mem_write;
+			handler16 = peb->ti99_4p_expansion_ports[peb->active_card].w.width_16bit.mem_write;
 			if (handler16)
-				(*handler16)(space, offset, data, /*mem_mask*/0xffff);
+				(*handler16)(peb->space, offset, data, /*mem_mask*/0xffff);
 		}
 	}
 }
@@ -757,15 +756,62 @@ WRITE16_HANDLER ( ti99_4p_peb_w )
 /*
     Set the state of the SENILA line (snug sgcpu 99/4p)
 */
-void ti99_4p_peb_set_senila(int state)
+void ti99_4p_peb_set_senila(running_device *box, int state)
 {
-	senila = (state != 0);
+	ti99_peb_state *peb = get_safe_token(box);
+	peb->senila = (state != 0);
 }
 
 /*
     Set the state of the SENILB line (snug sgcpu 99/4p)
 */
-void ti99_4p_peb_set_senilb(int state)
+void ti99_4p_peb_set_senilb(running_device *box, int state)
 {
-	senilb = (state != 0);
+	ti99_peb_state *peb = get_safe_token(box);
+	peb->senilb = (state != 0);
 }
+
+
+/***************************************************************************
+    DEVICE FUNCTIONS
+***************************************************************************/
+
+static DEVICE_START( ti99_peb )
+{
+}
+
+static DEVICE_STOP( ti99_peb )
+{
+}
+
+static DEVICE_RESET( ti99_peb )
+{
+	ti99_peb_state *peb = get_safe_token(device);
+
+	peb->has_16bit_peb = get_config(device)->mode16;
+	peb->inta_callback = get_config(device)->inta_callback;
+	peb->intb_callback = get_config(device)->intb_callback;
+
+	peb->active_card = -1;
+	peb->active_card_tmp = -1;
+
+	peb->mapper_override = FALSE; // for ti99_4p
+
+	peb->ila = 0;
+	peb->ilb = 0;
+
+	peb->space = cputag_get_address_space(device->machine, "maincpu", ADDRESS_SPACE_PROGRAM);
+
+	// Remove all card handlers; must be reinstalled
+	memset(peb->expansion_ports, 0, sizeof(peb->expansion_ports));
+	memset(peb->ti99_4p_expansion_ports, 0, sizeof(peb->ti99_4p_expansion_ports));
+}
+
+static const char DEVTEMPLATE_SOURCE[] = __FILE__;
+
+#define DEVTEMPLATE_ID(p,s)             p##ti99_peb##s
+#define DEVTEMPLATE_FEATURES            DT_HAS_START | DT_HAS_STOP | DT_HAS_RESET | DT_HAS_INLINE_CONFIG
+#define DEVTEMPLATE_NAME                "TI99 Peripheral Expansion System"
+#define DEVTEMPLATE_FAMILY              "External devices"
+#include "devtempl.h"
+
