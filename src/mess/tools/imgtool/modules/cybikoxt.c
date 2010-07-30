@@ -1,8 +1,8 @@
 /*
 
-    Cybiko Classic File System
+    Cybiko Xtreme File System
 
-    (c) 2007 Tim Schuerewegen
+    (c) 2010 Tim Schuerewegen
 
 */
 
@@ -43,14 +43,6 @@ enum
 #define	MAX_PAGE_SIZE (264 * 2)
 
 #define INVALID_FILE_ID  0xFFFF
-
-enum
-{
-	FLASH_TYPE_INVALID,
-	FLASH_TYPE_AT45DB041,
-	FLASH_TYPE_AT45DB081,
-	FLASH_TYPE_AT45DB161
-};
 
 #define BLOCK_USED(x)      (x[0] & 0x80)
 #define BLOCK_FILE_ID(x)   buffer_read_16_be( x + 2)
@@ -95,33 +87,30 @@ static void buffer_write_16_be( UINT8 *buffer, UINT16 data)
 	buffer[1] = (data >> 0) & 0xFF;
 }
 
-// page = crc1 (4) + wcnt (2) + crc2 (2) + data (x) + unk (2)
+// page = crc (2) + data (x)
 
-static UINT32 page_buffer_calc_checksum_1( UINT8 *buffer, UINT32 size, int block_type)
+static UINT16 page_buffer_calc_checksum( UINT8 *data, UINT32 size)
 {
-	return crc32( 0, buffer + 8, (block_type == BLOCK_TYPE_BOOT) ? 250 : size - 10);
-}
-
-static UINT16 page_buffer_calc_checksum_2( UINT8 *buffer)
-{
-	UINT16 val = 0xAF17;
-	val ^= buffer_read_16_be( buffer + 0);
-	val ^= buffer_read_16_be( buffer + 2);
-	val ^= buffer_read_16_be( buffer + 4);
-	return FLIPENDIAN_INT16(val);
+	int i;
+	UINT32 val = 0;
+	for (i = 0; i < size; i++)
+	{
+		val = (val ^ data[i] ^ i) << 1;
+		val = val | ((val >> 16) & 0x0001);
+	}
+	return val;
 }
 
 static int page_buffer_verify( UINT8 *buffer, UINT32 size, int block_type)
 {
-	UINT32 checksum_page, checksum_calc;
-	// checksum 1
-	checksum_calc = page_buffer_calc_checksum_1( buffer, size, block_type);
-	checksum_page = buffer_read_32_be( buffer + 0);
-	if (checksum_calc != checksum_page) return FALSE;
-	// checksum 2
-	checksum_calc = page_buffer_calc_checksum_2( buffer);
-	checksum_page = buffer_read_16_be( buffer + 6);
-	if (checksum_calc != checksum_page) return FALSE;
+	// checksum
+	if (block_type == BLOCK_TYPE_FILE)
+	{
+		UINT32 checksum_page, checksum_calc;
+		checksum_calc = page_buffer_calc_checksum( buffer + 2, size - 2);
+		checksum_page = buffer_read_16_be( buffer + 0);
+		if (checksum_calc != checksum_page) return FALSE;
+	}
 	// ok
 	return TRUE;
 }
@@ -181,7 +170,7 @@ static int cfs_block_read( cybiko_file_system *cfs, UINT8 *buffer, int block_typ
 	UINT32 page;
 	if (!cfs_block_to_page( cfs, block_type, block, &page)) return FALSE;
 	if (!cfs_page_read( cfs, buffer_page, page)) return FALSE;
-	memcpy( buffer, buffer_page + 8, cfs->page_size - 10);
+	memcpy( buffer, buffer_page + 2, cfs->page_size - 2);
 	return TRUE;
 }
 
@@ -189,11 +178,17 @@ static int cfs_block_write( cybiko_file_system *cfs, UINT8 *buffer, int block_ty
 {
 	UINT8 buffer_page[MAX_PAGE_SIZE];
 	UINT32 page;
-	memcpy( buffer_page + 8, buffer, cfs->page_size - 10);
-	buffer_write_32_be( buffer_page + 0, page_buffer_calc_checksum_1( buffer_page, cfs->page_size, block_type));
-	buffer_write_16_be( buffer_page + 4, cfs->write_count++);
-	buffer_write_16_be( buffer_page + 6, page_buffer_calc_checksum_2( buffer_page));
-	buffer_write_16_be( buffer_page + cfs->page_size - 2, 0xFFFF);
+	UINT16 checksum;
+	memcpy( buffer_page + 2, buffer, cfs->page_size - 2);
+	if (block_type == BLOCK_TYPE_BOOT)
+	{
+		checksum = 0xFFFF;
+	}
+	else
+	{
+		checksum = page_buffer_calc_checksum( buffer_page + 2, cfs->page_size - 2);
+	}
+	buffer_write_16_be( buffer_page + 0, checksum);
 	if (!cfs_block_to_page( cfs, block_type, block, &page)) return FALSE;
 	if (!cfs_page_write( cfs, buffer_page, page)) return FALSE;
 	return TRUE;
@@ -244,7 +239,7 @@ static int cfs_file_find( cybiko_file_system *cfs, const char *filename, UINT16 
 	for (i=0;i<cfs->block_count_file;i++)
 	{
 		if (!cfs_block_read( cfs, buffer, BLOCK_TYPE_FILE, i)) return FALSE;
-		if (BLOCK_USED(buffer) && (strncmp( filename, BLOCK_FILENAME(buffer), 40) == 0))
+		if (BLOCK_USED(buffer) && (BLOCK_PART_ID(buffer) == 0) && (strcmp( filename, BLOCK_FILENAME(buffer)) == 0))
 		{
 			*file_id = i;
 			return TRUE;
@@ -266,16 +261,11 @@ static int cfs_verify( cybiko_file_system *cfs)
 	return TRUE;
 }
 
-static int cfs_init( cybiko_file_system *cfs, imgtool_stream *stream, int flash_type)
+static int cfs_init( cybiko_file_system *cfs, imgtool_stream *stream)
 {
 	cfs->stream = stream;
-	switch (flash_type)
-	{
-		case FLASH_TYPE_AT45DB041 : cfs->page_count = 2048; cfs->page_size = 264; break;
-		case FLASH_TYPE_AT45DB081 : cfs->page_count = 4096; cfs->page_size = 264; break;
-		case FLASH_TYPE_AT45DB161 : cfs->page_count = 4096; cfs->page_size = 528; break;
-		default                   : return FALSE;
-	}
+	cfs->page_count = 2005;
+	cfs->page_size = 258;
 	cfs->block_count_boot = 5;
 	cfs->block_count_file = cfs->page_count - cfs->block_count_boot;
 	cfs->write_count = 0;
@@ -299,6 +289,12 @@ static int cfs_format( cybiko_file_system *cfs)
 	{
 		if (!cfs_block_write( cfs, buffer, BLOCK_TYPE_FILE, i)) return FALSE;
 	}
+	// padding
+	buffer[0] = 0xFF;
+	for (i=0;i<0x1B56;i++)
+	{
+		stream_write( cfs->stream, buffer, 1);
+	}
 	// ok
 	return TRUE;
 }
@@ -319,40 +315,16 @@ static UINT16 cfs_calc_free_blocks( cybiko_file_system *cfs)
 static UINT32 cfs_calc_free_space( cybiko_file_system *cfs, UINT16 blocks)
 {
 	UINT32 free_space;
-	free_space = blocks * (cfs->page_size - 0x10);
+	free_space = blocks * ((cfs->page_size - 2) - 6);
 	if (free_space > 0) free_space -= FILE_HEADER_SIZE;
 	return free_space;
-}
-
-static int flash_size_to_flash_type( size_t size)
-{
-	switch (size)
-	{
-		case 0x084000 : return FLASH_TYPE_AT45DB041;
-		case 0x108000 : return FLASH_TYPE_AT45DB081;
-		case 0x210000 : return FLASH_TYPE_AT45DB161;
-		default       : return FLASH_TYPE_INVALID;
-	}
-}
-
-static int flash_option_to_flash_type( int option)
-{
-	switch (option)
-	{
-		case 0  : return FLASH_TYPE_AT45DB041;
-		case 1  : return FLASH_TYPE_AT45DB081;
-		case 2  : return FLASH_TYPE_AT45DB161;
-		default : return FLASH_TYPE_INVALID;
-	}
 }
 
 static imgtoolerr_t cybiko_image_open( imgtool_image *image, imgtool_stream *stream)
 {
 	cybiko_file_system *cfs = (cybiko_file_system*)imgtool_image_extra_bytes( image);
-	int flash_type;
 	// init
-	flash_type = flash_size_to_flash_type( stream_size( stream));
-	if (!cfs_init( cfs, stream, flash_type)) return IMGTOOLERR_CORRUPTIMAGE;
+	if (!cfs_init( cfs, stream)) return IMGTOOLERR_CORRUPTIMAGE;
 	// verify
 	if (!cfs_verify( cfs)) return IMGTOOLERR_CORRUPTIMAGE;
 	// ok
@@ -368,10 +340,8 @@ static void cybiko_image_close( imgtool_image *image)
 static imgtoolerr_t cybiko_image_create( imgtool_image *image, imgtool_stream *stream, option_resolution *opts)
 {
 	cybiko_file_system *cfs = (cybiko_file_system*)imgtool_image_extra_bytes( image);
-	int flash_type;
 	// init
-	flash_type = flash_option_to_flash_type( option_resolution_lookup_int( opts, 'F'));
-	if (!cfs_init( cfs, stream, flash_type)) return IMGTOOLERR_CORRUPTIMAGE;
+	if (!cfs_init( cfs, stream)) return IMGTOOLERR_CORRUPTIMAGE;
 	// format
 	if (!cfs_format( cfs)) return IMGTOOLERR_CORRUPTIMAGE;
 	// ok
@@ -439,6 +409,8 @@ static imgtoolerr_t cybiko_image_read_file( imgtool_partition *partition, const 
 	UINT8 buffer[MAX_PAGE_SIZE];
 	UINT16 file_id, part_id = 0, old_part_id;
 	int i;
+	// check filename
+	if (strlen( filename) > 58) return IMGTOOLERR_BADFILENAME;
 	// find file
 	if (!cfs_file_find( cfs, filename, &file_id)) return IMGTOOLERR_FILENOTFOUND;
 	// read file
@@ -468,6 +440,8 @@ static imgtoolerr_t cybiko_image_write_file( imgtool_partition *partition, const
 	UINT64 bytes_left;
 	cfs_file file;
 	int i;
+	// check filename
+	if (strlen( filename) > 58) return IMGTOOLERR_BADFILENAME;
 	// find file
 	if (!cfs_file_find( cfs, filename, &file_id)) file_id = INVALID_FILE_ID;
 	// check free space
@@ -486,21 +460,21 @@ static imgtoolerr_t cybiko_image_write_file( imgtool_partition *partition, const
 	// create/write destination file
 	bytes_left = stream_size( sourcef);
 	i = 0;
-	while ((bytes_left > 0) && (i < cfs->block_count_file))
+	while (i < cfs->block_count_file)
 	{
 		if (!cfs_block_read( cfs, buffer, BLOCK_TYPE_FILE, i)) return IMGTOOLERR_READERROR;
 		if (!BLOCK_USED(buffer))
 		{
 			if (part_id == 0) file_id = i;
-			memset( buffer, 0xFF, cfs->page_size - 0x10);
+			memset( buffer, 0xFF, cfs->page_size - 0x02);
 			buffer[0] = 0x80;
-			buffer[1] = cfs->page_size - 0x10 - ((part_id == 0) ? FILE_HEADER_SIZE : 0);
+			buffer[1] = (cfs->page_size - 2) - 6 - ((part_id == 0) ? FILE_HEADER_SIZE : 0);
 			if (bytes_left < buffer[1]) buffer[1] = bytes_left;
 			buffer_write_16_be( buffer + 2, file_id);
 			buffer_write_16_be( buffer + 4, part_id);
 			if (part_id == 0)
 			{
-				buffer[6] = 0;
+				buffer[6] = 0x20;
 				strcpy( BLOCK_FILENAME(buffer), filename);
 				buffer_write_32_be( buffer + 6 + FILE_HEADER_SIZE - 4, time_setup( time( NULL)));
 				stream_read( sourcef, buffer + 6 + FILE_HEADER_SIZE, buffer[1]);
@@ -511,6 +485,7 @@ static imgtoolerr_t cybiko_image_write_file( imgtool_partition *partition, const
 			}
 			if (!cfs_block_write( cfs, buffer, BLOCK_TYPE_FILE, i)) return IMGTOOLERR_WRITEERROR;
 			bytes_left -= buffer[1];
+			if (bytes_left == 0) break;
 			part_id++;
 		}
 		i++;
@@ -524,6 +499,8 @@ static imgtoolerr_t cybiko_image_delete_file( imgtool_partition *partition, cons
 	imgtool_image *image = imgtool_partition_image( partition);
 	cybiko_file_system *cfs = (cybiko_file_system*)imgtool_image_extra_bytes( image);
 	UINT16 file_id;
+	// check filename
+	if (strlen( filename) > 58) return IMGTOOLERR_BADFILENAME;
 	// find file
 	if (!cfs_file_find( cfs, filename, &file_id)) return IMGTOOLERR_FILENOTFOUND;
 	// delete file
@@ -532,19 +509,7 @@ static imgtoolerr_t cybiko_image_delete_file( imgtool_partition *partition, cons
 	return IMGTOOLERR_SUCCESS;
 }
 
-static OPTION_GUIDE_START( cybiko_image_createimage_optguide )
-	OPTION_ENUM_START( 'F', "flash", "Flash Type" )
-		OPTION_ENUM( 0, "AT45DB041", "AT45DB041 (528 KByte)" )
-		OPTION_ENUM( 1, "AT45DB081", "AT45DB081 (1056 KByte)" )
-		OPTION_ENUM( 2, "AT45DB161", "AT45DB161 (2112 KByte)" )
-	OPTION_ENUM_END
-OPTION_GUIDE_END
-
-//OPTION_GUIDE_START( cybiko_image_writefile_optguide )
-//  OPTION_INT( 'B', "boot", "Boot Flag" )
-//OPTION_GUIDE_END
-
-void cybiko_get_info( const imgtool_class *imgclass, UINT32 state, union imgtoolinfo *info)
+void cybikoxt_get_info( const imgtool_class *imgclass, UINT32 state, union imgtoolinfo *info)
 {
 	switch (state)
 	{
@@ -565,15 +530,11 @@ void cybiko_get_info( const imgtool_class *imgclass, UINT32 state, union imgtool
 		case IMGTOOLINFO_PTR_READ_FILE   : info->read_file   = cybiko_image_read_file; break;
 		case IMGTOOLINFO_PTR_WRITE_FILE  : info->write_file  = cybiko_image_write_file; break;
 		case IMGTOOLINFO_PTR_DELETE_FILE : info->delete_file = cybiko_image_delete_file; break;
-		case IMGTOOLINFO_PTR_CREATEIMAGE_OPTGUIDE : info->createimage_optguide = cybiko_image_createimage_optguide; break;
-//      case IMGTOOLINFO_PTR_WRITEFILE_OPTGUIDE   : info->writefile_optguide   = cybiko_image_writefile_optguide; break;
 		// --- the following bits of info are returned as NULL-terminated strings ---
-		case IMGTOOLINFO_STR_NAME            : strcpy( info->s = imgtool_temp_str(), "cybiko"); break;
-		case IMGTOOLINFO_STR_DESCRIPTION     : strcpy( info->s = imgtool_temp_str(), "Cybiko Classic File System"); break;
+		case IMGTOOLINFO_STR_NAME            : strcpy( info->s = imgtool_temp_str(), "cybikoxt"); break;
+		case IMGTOOLINFO_STR_DESCRIPTION     : strcpy( info->s = imgtool_temp_str(), "Cybiko Xtreme File System"); break;
 		case IMGTOOLINFO_STR_FILE            : strcpy( info->s = imgtool_temp_str(), __FILE__); break;
 		case IMGTOOLINFO_STR_FILE_EXTENSIONS : strcpy( info->s = imgtool_temp_str(), "bin,nv"); break;
 		case IMGTOOLINFO_STR_EOLN            : strcpy( info->s = imgtool_temp_str(), "\r\n"); break;
-		case IMGTOOLINFO_STR_CREATEIMAGE_OPTSPEC : strcpy( info->s = imgtool_temp_str(), "F[0]-2"); break;
-//      case IMGTOOLINFO_STR_WRITEFILE_OPTSPEC   : strcpy( info->s = imgtool_temp_str(), "B[0]-1"); break;
 	}
 }
