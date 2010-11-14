@@ -28,6 +28,8 @@ System Driver Changes:
 
 - [ABC80] Added graphics PROMs. [Ola Andersson]
 
+- [ABC80] Refactored video to work like real hardware. [Curt Coder]
+
 - [ABC800C] Added Color version ROMs. [Ola Andersson]
 
 - [SMS] Improved Light Phaser emulation and converted it to use timers 
