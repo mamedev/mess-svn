@@ -17,7 +17,6 @@
 #include "emu.h"
 #include "machine/c64exp.h"
 #include "machine/intelfsh.h"
-#include "machine/nvram.h"
 
 
 
@@ -49,7 +48,7 @@ protected:
 	virtual UINT8 c64_cd_r(address_space &space, offs_t offset, int roml, int romh, int io1, int io2);
 	virtual void c64_cd_w(address_space &space, offs_t offset, UINT8 data, int roml, int romh, int io1, int io2);
 	virtual int c64_exrom_r();
-	virtual int c64_game_r(offs_t offset, int ba, int rw);
+	virtual int c64_game_r(offs_t offset, int ba, int rw, int hiram);
 
 private:
 	required_device<amd_29f040_device> m_flash_roml;
