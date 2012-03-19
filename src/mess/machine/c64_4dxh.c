@@ -1,8 +1,7 @@
 /**********************************************************************
 
-    Classical Games/Protovision 4 Player Interface emulation
+	The Digital Excess & Hitmen 4-Player Joystick adapter emulation
 
-    http://www.protovision-online.com/hardw/4_player.htm
     http://hitmen.c02.at/html/hardware.html
 
     Copyright MESS Team.
@@ -10,7 +9,7 @@
 
 **********************************************************************/
 
-#include "c64_4cga.h"
+#include "c64_4dxh.h"
 
 
 
@@ -18,28 +17,30 @@
 //  DEVICE DEFINITIONS
 //**************************************************************************
 
-const device_type C64_4CGA = &device_creator<c64_4cga_device>;
+const device_type C64_4DXH = &device_creator<c64_4dxh_device>;
 
+
+INPUT_CHANGED_MEMBER( c64_4dxh_device::fire4 )
+{
+	m_slot->sp2_w(newval);
+}
 
 static INPUT_PORTS_START( c64_4player )
-	PORT_START("JOY3")
+	PORT_START("SP2")
+	PORT_BIT( 0x01, IP_ACTIVE_LOW, IPT_BUTTON1 ) PORT_PLAYER(4) PORT_CHANGED_MEMBER(DEVICE_SELF, c64_4dxh_device, fire4, 0)
+
+	PORT_START("PB")
 	PORT_BIT( 0x01, IP_ACTIVE_LOW, IPT_JOYSTICK_UP ) PORT_8WAY PORT_PLAYER(3)
 	PORT_BIT( 0x02, IP_ACTIVE_LOW, IPT_JOYSTICK_DOWN ) PORT_8WAY PORT_PLAYER(3)
 	PORT_BIT( 0x04, IP_ACTIVE_LOW, IPT_JOYSTICK_LEFT ) PORT_8WAY PORT_PLAYER(3)
 	PORT_BIT( 0x08, IP_ACTIVE_LOW, IPT_JOYSTICK_RIGHT ) PORT_8WAY PORT_PLAYER(3)
-	PORT_BIT( 0xf0, IP_ACTIVE_LOW, IPT_UNUSED )
+	PORT_BIT( 0x10, IP_ACTIVE_LOW, IPT_JOYSTICK_UP ) PORT_8WAY PORT_PLAYER(4)
+	PORT_BIT( 0x20, IP_ACTIVE_LOW, IPT_JOYSTICK_DOWN ) PORT_8WAY PORT_PLAYER(4)
+	PORT_BIT( 0x40, IP_ACTIVE_LOW, IPT_JOYSTICK_LEFT ) PORT_8WAY PORT_PLAYER(4)
+	PORT_BIT( 0x80, IP_ACTIVE_LOW, IPT_JOYSTICK_RIGHT ) PORT_8WAY PORT_PLAYER(4)
 
-	PORT_START("JOY4")
-	PORT_BIT( 0x01, IP_ACTIVE_LOW, IPT_JOYSTICK_UP ) PORT_8WAY PORT_PLAYER(4)
-	PORT_BIT( 0x02, IP_ACTIVE_LOW, IPT_JOYSTICK_DOWN ) PORT_8WAY PORT_PLAYER(4)
-	PORT_BIT( 0x04, IP_ACTIVE_LOW, IPT_JOYSTICK_LEFT ) PORT_8WAY PORT_PLAYER(4)
-	PORT_BIT( 0x08, IP_ACTIVE_LOW, IPT_JOYSTICK_RIGHT ) PORT_8WAY PORT_PLAYER(4)
-	PORT_BIT( 0xf0, IP_ACTIVE_LOW, IPT_UNUSED )
-
-	PORT_START("FIRE")
+	PORT_START("PA2")
 	PORT_BIT( 0x10, IP_ACTIVE_LOW, IPT_BUTTON1 ) PORT_PLAYER(3)
-	PORT_BIT( 0x20, IP_ACTIVE_LOW, IPT_BUTTON1 ) PORT_PLAYER(4)
-	PORT_BIT( 0xcf, IP_ACTIVE_LOW, IPT_UNUSED )
 INPUT_PORTS_END
 
 
@@ -47,7 +48,7 @@ INPUT_PORTS_END
 //  input_ports - device-specific input ports
 //-------------------------------------------------
 
-ioport_constructor c64_4cga_device::device_input_ports() const
+ioport_constructor c64_4dxh_device::device_input_ports() const
 {
 	return INPUT_PORTS_NAME( c64_4player );
 }
@@ -59,13 +60,12 @@ ioport_constructor c64_4cga_device::device_input_ports() const
 //**************************************************************************
 
 //-------------------------------------------------
-//  c64_4cga_device - constructor
+//  c64_4dxh_device - constructor
 //-------------------------------------------------
 
-c64_4cga_device::c64_4cga_device(const machine_config &mconfig, const char *tag, device_t *owner, UINT32 clock) :
-	device_t(mconfig, C64_4CGA, "C64 Protovision 4 Player Interface", tag, owner, clock),
-	device_c64_user_port_interface(mconfig, *this),
-	m_port(0)
+c64_4dxh_device::c64_4dxh_device(const machine_config &mconfig, const char *tag, device_t *owner, UINT32 clock) :
+	device_t(mconfig, C64_4DXH, "C64 DXH 4-Player Adapter", tag, owner, clock),
+	device_c64_user_port_interface(mconfig, *this)
 {
 }
 
@@ -74,10 +74,8 @@ c64_4cga_device::c64_4cga_device(const machine_config &mconfig, const char *tag,
 //  device_start - device-specific startup
 //-------------------------------------------------
 
-void c64_4cga_device::device_start()
+void c64_4dxh_device::device_start()
 {
-	// state saving
-	save_item(NAME(m_port));
 }
 
 
@@ -85,20 +83,9 @@ void c64_4cga_device::device_start()
 //  c64_pb_r - port B read
 //-------------------------------------------------
 
-UINT8 c64_4cga_device::c64_pb_r(address_space &space, offs_t offset)
+UINT8 c64_4dxh_device::c64_pb_r(address_space &space, offs_t offset)
 {
-	UINT8 data = input_port_read(*this, "FIRE");
-
-	if (m_port)
-	{
-		data &= input_port_read(*this, "JOY3");
-	}
-	else
-	{
-		data &= input_port_read(*this, "JOY4");
-	}
-
-	return data;
+	return input_port_read(*this, "PB");
 }
 
 
@@ -106,7 +93,17 @@ UINT8 c64_4cga_device::c64_pb_r(address_space &space, offs_t offset)
 //  c64_pb_w - port B write
 //-------------------------------------------------
 
-void c64_4cga_device::c64_pb_w(address_space &space, offs_t offset, UINT8 data)
+int c64_4dxh_device::c64_pa2_r()
 {
-	m_port = BIT(data, 7);
+	return BIT(input_port_read(*this, "PA2"), 0);
+}
+
+
+//-------------------------------------------------
+//  c64_cnt1_w - CNT 1 write
+//-------------------------------------------------
+
+void c64_4dxh_device::c64_cnt1_w(int level)
+{
+	m_slot->cnt2_w(level);
 }
